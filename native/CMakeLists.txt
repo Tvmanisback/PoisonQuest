@@ -13,7 +13,10 @@ set(POISON_NAMESPACE "Poison" CACHE STRING "Namespace of the managed entry class
 set(POISON_CLASS     "Plugin" CACHE STRING "Managed entry class")
 set(POISON_METHOD    "Bootstrap" CACHE STRING "Managed entry method (static, no args)")
 
-add_library(Poison SHARED src/poison_loader.cpp)
+add_library(Poison SHARED
+    src/poison_loader.cpp
+    src/il2cpp_util.cpp
+    src/mods.cpp)
 set_target_properties(Poison PROPERTIES OUTPUT_NAME "Poison") # -> libPoison.so
 
 target_compile_definitions(Poison PRIVATE

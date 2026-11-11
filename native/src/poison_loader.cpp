@@ -4,16 +4,14 @@
 //   1. Starts a background thread as soon as the library is loaded
 //      (constructor, JNI_OnLoad, or an explicit call to Poison_Start()).
 //   2. Waits for libil2cpp.so to be mapped and the IL2CPP domain to be ready.
-//   3. Scans every loaded assembly for <POISON_NAMESPACE>.<POISON_CLASS>.
-//   4. Attaches the thread to the VM and invokes the static, parameterless
-//      <POISON_METHOD> (Plugin.Bootstrap). That method only subscribes to
-//      Application.onBeforeRender, so the real menu start-up (creating
-//      GameObjects, etc.) happens on Unity's main thread on the first frame.
-//
-// The managed menu code must be part of the game's IL2CPP metadata for step 3 to
-// find it; if it is not, the loader logs that and keeps retrying until timeout.
+//   3. Attaches the thread to the VM and installs the native mods (mods.cpp): a hook on
+//      GorillaTagger's per-frame update that runs speed / fly / gravity on the main thread.
+//   4. Optionally, if <POISON_NAMESPACE>.<POISON_CLASS> exists in the game's IL2CPP
+//      metadata, invokes the static <POISON_METHOD> (Plugin.Bootstrap) as well.
 
 #include "il2cpp_api.h"
+#include "il2cpp_util.h"
+#include "mods.h"
 
 #include <android/log.h>
 #include <dlfcn.h>
@@ -70,6 +68,11 @@ bool ResolveApi(Il2cppApi& api) {
     RESOLVE(class_from_name, "il2cpp_class_from_name")
     RESOLVE(class_get_method_from_name, "il2cpp_class_get_method_from_name")
     RESOLVE(runtime_invoke, "il2cpp_runtime_invoke")
+    RESOLVE(class_get_field_from_name, "il2cpp_class_get_field_from_name")
+    RESOLVE(field_get_value, "il2cpp_field_get_value")
+    RESOLVE(field_set_value, "il2cpp_field_set_value")
+    RESOLVE(field_static_get_value, "il2cpp_field_static_get_value")
+    RESOLVE(object_unbox, "il2cpp_object_unbox")
 #undef RESOLVE
     dlclose(handle);  // balance the RTLD_NOLOAD refcount; the library stays mapped
     return ok;
@@ -107,7 +110,8 @@ bool VmLooksReady(const Il2cppApi& api, Il2CppDomain* domain) {
 }
 
 void LoaderThread() {
-    LOGI("loader thread started (target %s.%s::%s)", POISON_NAMESPACE, POISON_CLASS, POISON_METHOD);
+    LOGI("loader thread started (managed entry %s.%s::%s is optional)", POISON_NAMESPACE, POISON_CLASS,
+         POISON_METHOD);
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(kTimeoutSeconds);
     auto sleep = [] { std::this_thread::sleep_for(std::chrono::milliseconds(kPollIntervalMs)); };
@@ -115,8 +119,10 @@ void LoaderThread() {
     Il2cppApi api{};
     bool api_ready = false;
     bool settled = false;
-    int attempts = 0;
-    bool logged_missing_class = false;
+    bool attached = false;
+    bool managed_done = false;
+    bool native_done = false;
+    int managed_attempts = 0;
 
     while (std::chrono::steady_clock::now() < deadline) {
         if (!api_ready) {
@@ -141,39 +147,46 @@ void LoaderThread() {
             continue;
         }
 
-        const char* image_name = nullptr;
-        Il2CppClass* klass = FindEntryClass(api, domain, &image_name);
-        if (!klass) {
-            if (!logged_missing_class) {
-                LOGW("%s.%s not found in any loaded assembly yet; retrying", POISON_NAMESPACE, POISON_CLASS);
-                logged_missing_class = true;
-            }
-            sleep();
-            continue;
+        if (!attached) {
+            api.thread_attach(domain);
+            il2::Init(api, domain);
+            attached = true;
         }
 
-        const MethodInfo* method = api.class_get_method_from_name(klass, POISON_METHOD, 0);
-        if (!method) {
-            LOGE("%s.%s has no parameterless %s method", POISON_NAMESPACE, POISON_CLASS, POISON_METHOD);
+        // Optional: managed C# menu, if its code is part of the game's IL2CPP build.
+        if (!managed_done) {
+            const char* image_name = nullptr;
+            if (Il2CppClass* klass = FindEntryClass(api, domain, &image_name)) {
+                const MethodInfo* method = api.class_get_method_from_name(klass, POISON_METHOD, 0);
+                if (!method) {
+                    LOGE("%s.%s has no parameterless %s method", POISON_NAMESPACE, POISON_CLASS, POISON_METHOD);
+                    managed_done = true;
+                } else {
+                    Il2CppException* exception = nullptr;
+                    api.runtime_invoke(method, nullptr, nullptr, &exception);
+                    if (!exception) {
+                        LOGI("invoked %s.%s::%s from image '%s'", POISON_NAMESPACE, POISON_CLASS, POISON_METHOD,
+                             image_name ? image_name : "?");
+                        managed_done = true;
+                    } else if (++managed_attempts >= kMaxInvokeAttempts) {
+                        LOGE("%s threw %d times; giving up on the managed entry", POISON_METHOD, managed_attempts);
+                        managed_done = true;
+                    }
+                }
+            }
+        }
+
+        // Native mods: hook GorillaTagger's per-frame update once the game classes exist.
+        if (!native_done) native_done = poison::InstallMods();
+
+        if (native_done) {
+            if (!managed_done) LOGI("managed Poison.Plugin not present; running native mods only");
             return;
         }
-
-        api.thread_attach(domain);
-        Il2CppException* exception = nullptr;
-        api.runtime_invoke(method, nullptr, nullptr, &exception);
-        if (exception) {
-            LOGE("%s threw (attempt %d/%d)", POISON_METHOD, attempts + 1, kMaxInvokeAttempts);
-            if (++attempts >= kMaxInvokeAttempts) return;
-            sleep();
-            continue;
-        }
-
-        LOGI("invoked %s.%s::%s from image '%s'", POISON_NAMESPACE, POISON_CLASS, POISON_METHOD,
-             image_name ? image_name : "?");
-        return;
+        sleep();
     }
 
-    LOGE("gave up after %d s: Poison entry point was never found", kTimeoutSeconds);
+    LOGE("gave up after %d s: game classes (GorillaTagger/GTPlayer) never appeared", kTimeoutSeconds);
 }
 
 void Start() {

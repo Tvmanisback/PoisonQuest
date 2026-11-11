@@ -7,31 +7,41 @@ mods and, optionally, starts the managed C# menu if that is part of the game's I
 
 The full menu is ~85,000 lines of C# built on Harmony, Photon and 179 game DLL references, and
 IL2CPP cannot load a `.dll` at runtime, so it cannot be turned into a `.so` mechanically. The
-core mods from `Mods/Movement.cs` are re-implemented natively:
+self-only movement mods from `Mods/Movement.cs` are re-implemented natively (15 mods):
 
-| Mod | Behaviour | Config |
-|-----|-----------|--------|
-| Speed boost | sets `GTPlayer.maxJumpSpeed` / `jumpMultiplier` each frame | `speed`, `maxspeed`, `jumpmulti` |
-| Fly | while right primary is held, move along the head's forward and zero velocity | `fly`, `flyspeed` |
-| Gravity | low / zero / high via `Rigidbody.AddForce(..., Acceleration)` | `gravity=none\|low\|zero\|high` |
+| Key | Movement.cs mod | Behaviour |
+|-----|-----------------|-----------|
+| `speed` (+`maxspeed`, `jumpmulti`) | SpeedBoost | sets `GTPlayer.maxJumpSpeed` / `jumpMultiplier` |
+| `fly` | Fly | right primary: move along head forward, zero velocity |
+| `triggerfly` | TriggerFly | right trigger: velocity along head forward; release stops |
+| `joystickfly` | JoystickFly | left stick: head forward/right, normalized |
+| `dash` | Dash | right primary rising edge: velocity boost |
+| `reversevelocity` | ReverseVelocity | right primary: flip velocity, 0.5 s cooldown |
+| `updown` | UpAndDown | trigger up / grip down, gravity cancelled |
+| `leftright` | LeftAndRight | trigger left / grip right (body axis) |
+| `forwardback` | ForwardsAndBackwards | trigger forward / grip back (body axis) |
+| `featherfalling` | FeatherFalling | damp velocity, clamp fall speed to -2 on ground |
+| `funmove` | FunMove | velocity += velocity * dt |
+| `strafe` | Strafe | horizontal velocity = body forward * maxJumpSpeed |
+| `dynamicstrafe` | DynamicStrafe | steer horizontal velocity along body forward |
+| `groundhelper` | GroundHelper | grip: cancel upward velocity |
+| `gravity=low\|zero\|high` | Low/Zero/HighGravity | `Rigidbody.AddForce(..., Acceleration)` |
 
-Everything is off by default. Settings live in a text file that is created on first run and
-re-read about once per second:
+`flyspeed` sets the speed for the fly, dash and axis mods. Everything is off by default.
+Settings live in a text file that is created on first run and hot-reloaded (about once per second):
 
 ```
 /sdcard/Android/data/<game package>/files/PoisonMenu/native.cfg
 ```
 
-```
-speed=0
-maxspeed=7.5
-jumpmulti=1.1
-fly=0
-flyspeed=10
-gravity=none
-```
-
 (`POISON_CONFIG=<path>` overrides the location.) Logs go to logcat under the tag `Poison`.
+
+### Not ported
+
+Mods that need Harmony patches, Photon/network state, other players' rigs, custom
+GameObjects/UI, file I/O systems or the menu UI itself (platforms, grappling hooks, rig mods,
+guns, projectiles, visuals, safety/anti-report, etc.). Those depend on game internals that can
+only be hooked reliably once a native hooking layer exists and can be tested on a device.
 
 ## How it works
 
@@ -48,7 +58,7 @@ Exports: `JNI_OnLoad`, `Poison_Start`, `Poison_Version`.
 
 Assumptions about the game that can only be confirmed on a device: class and member names
 (`GorillaLocomotion.GTPlayer`, `GorillaTagger.rigidbody/headCollider`,
-`ControllerInputPoller.rightControllerPrimaryButton`, `Rigidbody.set_linearVelocity`) match the
+`ControllerInputPoller.rightControllerPrimaryButton/rightGrab/rightControllerIndexFloat/leftControllerPrimary2DAxis`, `Rigidbody.set_linearVelocity`) match the
 names used by the C# in this repo, and Unity 6000's `MethodInfo` keeps `methodPointer` first.
 If something is missing the mod is skipped and logged.
 

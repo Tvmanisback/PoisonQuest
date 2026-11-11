@@ -54,7 +54,11 @@ std::vector<Il2CppClass*> g_classes;
 
 // Game state.
 Obj g_player, g_tagger, g_poller, g_rigidbody, g_headCollider, g_headTransform, g_playerTransform;
-Vec3 g_playerPos{0, 0, 0}, g_headForward{0, 0, 1}, g_velocity{9, 9, 9}, g_lastForce{0, 0, 0};
+Obj g_bodyCollider, g_bodyTransform;
+Vec3 g_playerPos{0, 0, 0}, g_velocity{9, 9, 9}, g_lastForce{0, 0, 0};
+Vec3 g_headForward{0, 0, 1}, g_headRight{1, 0, 0}, g_bodyForward{0, 0, 1}, g_bodyRight{1, 0, 0};
+float g_time = 100.0f;
+bool g_grounded = false;
 int g_forceCalls = 0, g_lastMode = -1;
 Box g_boxes[8];
 int g_boxIdx = 0;
@@ -91,10 +95,16 @@ void Build() {
     (void)collider;
 
     AddMethod(component, "get_transform", 0, [](Obj* self, void**, Box*) -> void* {
-        return self == &g_headCollider ? &g_headTransform : &g_playerTransform;
+        if (self == &g_headCollider) return &g_headTransform;
+        if (self == &g_bodyCollider) return &g_bodyTransform;
+        return &g_playerTransform;
     });
-    AddMethod(transform, "get_forward", 0, [](Obj*, void**, Box* r) -> void* {
-        std::memcpy(r->data, &g_headForward, sizeof(Vec3));
+    AddMethod(transform, "get_forward", 0, [](Obj* self, void**, Box* r) -> void* {
+        std::memcpy(r->data, self == &g_bodyTransform ? &g_bodyForward : &g_headForward, sizeof(Vec3));
+        return r;
+    });
+    AddMethod(transform, "get_right", 0, [](Obj* self, void**, Box* r) -> void* {
+        std::memcpy(r->data, self == &g_bodyTransform ? &g_bodyRight : &g_headRight, sizeof(Vec3));
         return r;
     });
     AddMethod(transform, "get_position", 0, [](Obj*, void**, Box* r) -> void* {
@@ -111,11 +121,24 @@ void Build() {
         ++g_forceCalls;
         return nullptr;
     });
+    AddMethod(rigidbody, "get_linearVelocity", 0, [](Obj*, void**, Box* r) -> void* {
+        std::memcpy(r->data, &g_velocity, sizeof(Vec3));
+        return r;
+    });
     AddMethod(rigidbody, "set_linearVelocity", 1, [](Obj*, void** a, Box*) -> void* {
         std::memcpy(&g_velocity, a[0], sizeof(Vec3));
         return nullptr;
     });
     AddMethod(time, "get_deltaTime", 0, [](Obj*, void**, Box* r) -> void* {
+        float dt = 0.02f;
+        std::memcpy(r->data, &dt, sizeof(float));
+        return r;
+    });
+    AddMethod(time, "get_time", 0, [](Obj*, void**, Box* r) -> void* {
+        std::memcpy(r->data, &g_time, sizeof(float));
+        return r;
+    });
+    AddMethod(time, "get_fixedDeltaTime", 0, [](Obj*, void**, Box* r) -> void* {
         float dt = 0.02f;
         std::memcpy(r->data, &dt, sizeof(float));
         return r;
@@ -135,6 +158,15 @@ void Build() {
     Il2CppClass* tagger = AddClass("", "GorillaTagger", 1);
     AddField(tagger, "rigidbody", 0, 8);
     AddField(tagger, "headCollider", 8, 8);
+    AddField(tagger, "bodyCollider", 16, 8);
+    AddMethod(tagger, "IsGrounded", 1, [](Obj*, void**, Box* r) -> void* {
+        r->data[0] = g_grounded ? 1 : 0;
+        return r;
+    });
+    AddMethod(tagger, "IsGrounded", 0, [](Obj*, void**, Box* r) -> void* {
+        r->data[0] = g_grounded ? 1 : 0;
+        return r;
+    });
     // Singleton exposed as a static field instead of get_Instance, to cover that path too.
     FieldInfo* inst = AddField(tagger, "Instance", 0, 8, true);
     void* taggerPtr = &g_tagger;
@@ -144,6 +176,9 @@ void Build() {
 
     Il2CppClass* poller = AddClass("", "ControllerInputPoller", 1);
     AddField(poller, "rightControllerPrimaryButton", 0, 1);
+    AddField(poller, "rightGrab", 1, 1);
+    AddField(poller, "rightControllerIndexFloat", 4, 4);
+    AddField(poller, "leftControllerPrimary2DAxis", 8, 8);
     FieldInfo* pinst = AddField(poller, "instance", 0, 8, true);
     void* pollerPtr = &g_poller;
     std::memcpy(pinst->staticData, &pollerPtr, sizeof(void*));
@@ -159,6 +194,8 @@ void Build() {
     void* head = &g_headCollider;
     std::memcpy(g_tagger.data + 0, &rb, 8);
     std::memcpy(g_tagger.data + 8, &head, 8);
+    void* body = &g_bodyCollider;
+    std::memcpy(g_tagger.data + 16, &body, 8);
     *reinterpret_cast<float*>(g_player.data + 0) = 6.5f;
     *reinterpret_cast<float*>(g_player.data + 4) = 1.1f;
 }
@@ -229,6 +266,22 @@ EXPORT void fake_engine_update() {
     reinterpret_cast<void (*)(void*, const void*)>(g_lateUpdate->methodPointer)(&g_tagger, g_lateUpdate);
 }
 EXPORT void fake_set_primary(int v) { g_poller.data[0] = v ? 1 : 0; }
+EXPORT void fake_set_grab(int v) { g_poller.data[1] = v ? 1 : 0; }
+EXPORT void fake_set_trigger(float v) { *reinterpret_cast<float*>(g_poller.data + 4) = v; }
+EXPORT void fake_set_joystick(float x, float y) {
+    float j[2] = {x, y};
+    std::memcpy(g_poller.data + 8, j, sizeof(j));
+}
+EXPORT void fake_set_head_axes(float fx, float fy, float fz, float rx, float ry, float rz) {
+    g_headForward = {fx, fy, fz};
+    g_headRight = {rx, ry, rz};
+}
+EXPORT void fake_set_body_axes(float fx, float fy, float fz, float rx, float ry, float rz) {
+    g_bodyForward = {fx, fy, fz};
+    g_bodyRight = {rx, ry, rz};
+}
+EXPORT void fake_set_time(float t) { g_time = t; }
+EXPORT void fake_set_grounded(int v) { g_grounded = v != 0; }
 EXPORT void fake_set_forward(float x, float y, float z) { g_headForward = {x, y, z}; }
 EXPORT void fake_set_player_state(float maxSpeed, float mult) {
     *reinterpret_cast<float*>(g_player.data + 0) = maxSpeed;

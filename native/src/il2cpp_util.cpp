@@ -77,19 +77,24 @@ Il2CppObject* GetObject(Il2CppClass* klass, Il2CppObject* self, const char* name
     return result;
 }
 
-bool GetBool(Il2CppClass* klass, Il2CppObject* self, const char* name, bool* out) {
+bool GetValue(Il2CppClass* klass, Il2CppObject* self, const char* name, void* out, size_t size) {
     if (!klass || !self) return false;
     if (FieldInfo* field = Field(klass, name)) {
-        bool value = false;
-        g_api.field_get_value(self, field, &value);
-        *out = value;
+        g_api.field_get_value(self, field, out);
         return true;
     }
     char getter[96];
     std::snprintf(getter, sizeof(getter), "get_%s", name);
     Il2CppObject* boxed = nullptr;
     if (!Call(Method(klass, getter, 0), self, nullptr, &boxed) || !boxed) return false;
-    *out = *static_cast<bool*>(g_api.object_unbox(boxed));
+    std::memcpy(out, g_api.object_unbox(boxed), size);
+    return true;
+}
+
+bool GetBool(Il2CppClass* klass, Il2CppObject* self, const char* name, bool* out) {
+    bool value = false;
+    if (!GetValue(klass, self, name, &value, sizeof(bool))) return false;
+    *out = value;
     return true;
 }
 

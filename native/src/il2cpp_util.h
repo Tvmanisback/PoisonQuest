@@ -3,11 +3,22 @@
 
 #include "il2cpp_api.h"
 
+#include <cstddef>
+
 namespace il2 {
+
+struct Vec2 {
+    float x, y;
+};
 
 struct Vec3 {
     float x, y, z;
 };
+
+inline Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+inline Vec3 operator-(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+inline Vec3 operator*(Vec3 a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+inline Vec3 operator-(Vec3 a) { return {-a.x, -a.y, -a.z}; }
 
 void Init(const Il2cppApi& api, Il2CppDomain* domain);
 const Il2cppApi& Api();
@@ -26,6 +37,8 @@ Il2CppObject* StaticInstance(Il2CppClass* klass);
 // Reads a reference-typed member, either a field or a get_<name>() property.
 Il2CppObject* GetObject(Il2CppClass* klass, Il2CppObject* self, const char* name);
 bool GetBool(Il2CppClass* klass, Il2CppObject* self, const char* name, bool* out);
+// Reads a value-type member (float, Vector2, ...) from a field or a get_<name>() property.
+bool GetValue(Il2CppClass* klass, Il2CppObject* self, const char* name, void* out, size_t size);
 // Writes a float member, either a field or a set_<name>(float) property.
 bool SetFloat(Il2CppClass* klass, Il2CppObject* self, const char* name, float value);
 

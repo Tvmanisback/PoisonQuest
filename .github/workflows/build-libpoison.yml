@@ -1,0 +1,80 @@
+name: Build libPoison.so (Quest / Unity 6000)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "native/**"
+      - ".github/workflows/build-libpoison.yml"
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "native/**"
+      - ".github/workflows/build-libpoison.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Host test of the loader logic (fake libil2cpp)
+        run: bash native/test/run.sh
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: Configure (arm64-v8a, Android 10+)
+        run: |
+          cmake -S native -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${{ steps.ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Strip and verify libPoison.so
+        run: |
+          mkdir -p dist/arm64-v8a
+          cp build/libPoison.so dist/arm64-v8a/libPoison.so
+          STRIP="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          READELF="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          NM="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          "$STRIP" --strip-unneeded dist/arm64-v8a/libPoison.so
+          file dist/arm64-v8a/libPoison.so | tee /dev/stderr | grep -q "ARM aarch64"
+          "$READELF" -d dist/arm64-v8a/libPoison.so | grep NEEDED
+          # Only system libraries may be required at load time.
+          if "$READELF" -d dist/arm64-v8a/libPoison.so | grep NEEDED | grep -Ev "libc\.so|libm\.so|libdl\.so|liblog\.so"; then
+            echo "unexpected shared-library dependency" >&2
+            exit 1
+          fi
+          "$NM" -D --defined-only dist/arm64-v8a/libPoison.so | grep -E "JNI_OnLoad|Poison_Start|Poison_Version"
+          ls -l dist/arm64-v8a/libPoison.so
+          sha256sum dist/arm64-v8a/libPoison.so | tee dist/arm64-v8a/libPoison.so.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libPoison-arm64-v8a
+          path: dist/arm64-v8a/
+          if-no-files-found: error
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/arm64-v8a/libPoison.so
+            dist/arm64-v8a/libPoison.so.sha256

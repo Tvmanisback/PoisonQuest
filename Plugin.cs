@@ -22,13 +22,34 @@
 using Poison.Managers;
 using Poison.Menu;
 using UnityEngine;
+using UnityEngine.Scripting;
 
 
 namespace Poison
 {
+    [Preserve]
     public static class Plugin
     {
-        
+        private static bool bootstrapped;
+
+        // Entry point for the native loader (libPoison.so on Quest / IL2CPP).
+        // The loader calls this from a background thread, where creating GameObjects is
+        // not allowed, so defer the real start-up to the first frame on the main thread.
+        [Preserve]
+        public static void Bootstrap()
+        {
+            if (bootstrapped) return;
+            bootstrapped = true;
+            Application.onBeforeRender += OnFirstFrame;
+        }
+
+        [Preserve]
+        private static void OnFirstFrame()
+        {
+            Application.onBeforeRender -= OnFirstFrame;
+            InjectDontDestroy();
+        }
+
         // Don't merge these methods, it just doesn't work
         public static void Inject()
         {
